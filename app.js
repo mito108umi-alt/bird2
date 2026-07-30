@@ -150,6 +150,17 @@ function randomInt(min, max) {
   return Math.floor(random(min, max + 1));
 }
 
+function randomStable(seed, min, max) {
+  const value =
+    Math.sin(seed * 12.9898 + 78.233) *
+    43758.5453;
+
+  const normalized =
+    value - Math.floor(value);
+
+  return lerp(min, max, normalized);
+}
+
 function smoothstep01(value) {
   const t = clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
@@ -271,6 +282,35 @@ class Bird {
     this.approachPhase = random(0, Math.PI * 2);
     this.approachRadius = random(0.06, 0.30);
     this.approachSpeed = random(0.75, 1.35);
+
+    this.hasComplexApproach = Math.random() < 0.70;
+    this.approachOrbitRadiusX = random(0.08, 0.52);
+    this.approachOrbitRadiusY = random(0.06, 0.38);
+    this.approachOrbitRadiusZ = random(0.10, 0.62);
+    this.approachOrbitSpeedX = random(0.70, 1.65);
+    this.approachOrbitSpeedY = random(0.62, 1.48);
+    this.approachOrbitSpeedZ = random(0.58, 1.42);
+    this.approachOrbitDirectionX = Math.random() < 0.5 ? -1 : 1;
+    this.approachOrbitDirectionY = Math.random() < 0.5 ? -1 : 1;
+    this.approachOrbitDirectionZ = Math.random() < 0.5 ? -1 : 1;
+
+    this.nearTextureSwitchProgress = random(0.68, 0.90);
+    this.nearWingPhaseOffset = random(0, 0.9);
+    this.nearWingFrameDuration = random(0.12, 0.22);
+
+    const exitRoll = Math.random();
+    this.exitMode =
+      exitRoll < 0.50 ? "right" :
+      exitRoll < 0.75 ? "up" : "down";
+
+    this.exitCurveX = random(0.18, 0.68);
+    this.exitCurveY = random(0.22, 0.78);
+    this.exitCurveZ = random(0.12, 0.72);
+    this.exitSpeedScale = random(0.84, 1.18);
+    this.exitPhase = random(0, Math.PI * 2);
+    this.exitOrbitRadiusX = random(0.05, 0.30);
+    this.exitOrbitRadiusY = random(0.05, 0.34);
+    this.exitOrbitRadiusZ = random(0.06, 0.42);
 
     /*
       8〜12秒の群れ旋回に個体差を与える。
@@ -406,7 +446,11 @@ class Bird {
         this.approachRadius *
         (1 - p);
 
-      perspective = clamp(2.65 / Math.max(worldZ, 0.22), 0.42, 10.8);
+      perspective = clamp(
+        2.65 / Math.max(worldZ, 0.22),
+        0.42,
+        10.8
+      );
 
       const spreadScale = lerp(0.52, 1.18, p);
 
@@ -421,11 +465,6 @@ class Bird {
           this.layout.y *
           spreadScale *
           perspective;
-
-        this.setTexture(
-          frontTextures[this.frontTextureIndex],
-          false
-        );
       } else if (this.approachStyle === 1) {
         screenX =
           lerp(
@@ -446,8 +485,6 @@ class Bird {
           this.layout.y *
           0.22 *
           perspective;
-
-        this.setTexture(highTexture, false);
       } else {
         screenX =
           lerp(
@@ -468,8 +505,68 @@ class Bird {
           this.layout.y *
           0.22 *
           perspective;
+      }
 
-        this.setTexture(highTexture, true);
+      if (this.hasComplexApproach) {
+        const t = elapsed - 5;
+        const envelope = Math.sin(p * Math.PI);
+
+        const orbitX =
+          t *
+          this.approachOrbitSpeedX *
+          this.approachOrbitDirectionX +
+          this.approachPhase;
+
+        const orbitY =
+          t *
+          this.approachOrbitSpeedY *
+          this.approachOrbitDirectionY +
+          this.approachPhase * 1.37;
+
+        const orbitZ =
+          t *
+          this.approachOrbitSpeedZ *
+          this.approachOrbitDirectionZ +
+          this.approachPhase * 0.73;
+
+        screenX +=
+          Math.cos(orbitX) *
+          this.approachOrbitRadiusX *
+          envelope *
+          perspective;
+
+        screenY +=
+          Math.sin(orbitY) *
+          this.approachOrbitRadiusY *
+          envelope *
+          perspective;
+
+        worldZ +=
+          Math.sin(orbitZ) *
+          this.approachOrbitRadiusZ *
+          envelope;
+
+        perspective = clamp(
+          2.65 / Math.max(worldZ, 0.22),
+          0.42,
+          10.8
+        );
+      }
+
+      if (p < this.nearTextureSwitchProgress) {
+        if (this.approachStyle === 0) {
+          this.setTexture(
+            frontTextures[this.frontTextureIndex],
+            false
+          );
+        } else if (this.approachStyle === 1) {
+          this.setTexture(highTexture, false);
+        } else {
+          this.setTexture(highTexture, true);
+        }
+        this.material.rotation = 0;
+      } else {
+        this.updateNearWingFrame(elapsed);
       }
     }
 
@@ -537,27 +634,101 @@ class Bird {
       旋回の速度を止めず、そのまま右へ飛び去る。
     */
     else {
-      const p = smoothstep01((elapsed - 12) / 3);
+      const rawP = clamp(
+        ((elapsed - 12) / 3) *
+        this.exitSpeedScale,
+        0,
+        1
+      );
+      const p = smoothstep01(rawP);
 
-      worldZ = lerp(0.88, 1.65, p);
-      perspective = clamp(2.1 / worldZ, 0.55, 3.2);
+      const exitOrbit =
+        (elapsed - 12) *
+        randomStable(this.index, 1.25, 2.15) +
+        this.exitPhase;
 
-      screenX =
+      const envelope = 1 - p * 0.35;
+
+      worldZ =
         lerp(
-          -screenAspect * 0.34,
-          screenAspect * 2.45,
+          0.88,
+          1.70 + this.exitCurveZ,
           p
         ) +
-        this.layout.x *
-        screenAspect *
-        0.36;
+        Math.sin(exitOrbit * 0.81) *
+        this.exitOrbitRadiusZ *
+        envelope;
 
-      screenY =
-        lerp(
-          this.layout.y * 0.62,
-          this.layout.y * 0.38 - 0.20,
-          p
-        );
+      perspective = clamp(
+        2.1 / Math.max(worldZ, 0.34),
+        0.48,
+        3.4
+      );
+
+      if (this.exitMode === "right") {
+        screenX =
+          lerp(
+            -screenAspect * 0.34,
+            screenAspect *
+              (2.20 + this.exitCurveX),
+            p
+          );
+
+        screenY =
+          lerp(
+            this.layout.y * 0.62,
+            this.layout.y * 0.30 -
+              0.10 +
+              Math.sin(p * Math.PI) *
+              this.exitCurveY *
+              0.30,
+            p
+          );
+      } else if (this.exitMode === "up") {
+        screenX =
+          lerp(
+            -screenAspect * 0.30,
+            screenAspect *
+              randomStable(this.index + 31, 0.15, 1.15),
+            p
+          ) +
+          Math.sin(p * Math.PI) *
+          this.exitCurveX;
+
+        screenY =
+          lerp(
+            this.layout.y * 0.58,
+            1.55 + this.exitCurveY,
+            p
+          );
+      } else {
+        screenX =
+          lerp(
+            -screenAspect * 0.30,
+            screenAspect *
+              randomStable(this.index + 67, 0.15, 1.15),
+            p
+          ) -
+          Math.sin(p * Math.PI) *
+          this.exitCurveX;
+
+        screenY =
+          lerp(
+            this.layout.y * 0.58,
+            -1.55 - this.exitCurveY,
+            p
+          );
+      }
+
+      screenX +=
+        Math.cos(exitOrbit) *
+        this.exitOrbitRadiusX *
+        envelope;
+
+      screenY +=
+        Math.sin(exitOrbit * 1.13) *
+        this.exitOrbitRadiusY *
+        envelope;
 
       this.updateWingFrame(elapsed);
     }
@@ -615,7 +786,7 @@ class Bird {
     let size =
       this.baseSize *
       perspective *
-      lerp(0.28, 1, emerge);
+      lerp(0.84, 1, emerge);
 
     if (elapsed >= 12) {
       const exitP = smoothstep01((elapsed - 12) / 3);
@@ -639,6 +810,23 @@ class Bird {
       Math.floor(
         (elapsed + this.wingPhaseOffset) /
         this.wingFrameDuration
+      ) % sequence.length;
+
+    this.setTexture(
+      birdTextures[sequence[frame]],
+      false
+    );
+  }
+
+  updateNearWingFrame(elapsed) {
+    const sequence = [1, 2, 1];
+    const frame =
+      Math.floor(
+        (
+          elapsed +
+          this.nearWingPhaseOffset
+        ) /
+        this.nearWingFrameDuration
       ) % sequence.length;
 
     this.setTexture(
