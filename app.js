@@ -31,8 +31,8 @@ const CONFIG = {
   CIRCLE_END: 12.0,
   EXIT_END: 15.0,
 
-  WING_FRAME_MIN: 0.075,
-  WING_FRAME_MAX: 0.15,
+  WING_FRAME_MIN: 0.085,
+  WING_FRAME_MAX: 0.115,
 
   /*
     bird PNGが右向きなら0。
@@ -44,8 +44,10 @@ const CONFIG = {
     群れ全体の進行方向から、
     各個体が自然にずれる角度。
   */
-  HEADING_OFFSET_MIN: THREE.MathUtils.degToRad(-10),
-  HEADING_OFFSET_MAX: THREE.MathUtils.degToRad(10),
+  HEADING_OFFSET_MIN: THREE.MathUtils.degToRad(-7),
+  HEADING_OFFSET_MAX: THREE.MathUtils.degToRad(7),
+
+  NORMAL_HEADING_LIMIT: THREE.MathUtils.degToRad(78),
 
   FLOAT_AMPLITUDE_MIN: 0.006,
   FLOAT_AMPLITUDE_MAX: 0.018,
@@ -339,13 +341,11 @@ class Bird {
     this.wingPhaseOffset = random(0, 0.45);
 
     /*
-      個体ごとに「連続して羽ばたく時間」と
-      「短く滑空する時間」を変える。
+      羽ばたきは止めず、個体ごとに速度と開始位置だけを変える。
+      不規則な停止をなくし、群れ全体を滑らかに見せる。
     */
-    this.flapBurstDuration = random(0.7, 1.8);
-    this.glideDuration = random(0.12, 0.55);
-    this.glideFrame = Math.random() < 0.65 ? 1 : 0;
-    this.wingCycleOffset = random(0, 2.0);
+    this.wingCycleOffset = random(0, 1.0);
+    this.wingSpeedMultiplier = random(0.88, 1.12);
 
     this.floatAmplitude = random(
       CONFIG.FLOAT_AMPLITUDE_MIN,
@@ -379,11 +379,11 @@ class Bird {
       CONFIG.HEADING_OFFSET_MAX
     );
 
-    this.turnResponse = random(0.08, 0.18);
-    this.pathLag = random(0, 0.32);
+    this.turnResponse = random(0.10, 0.15);
+    this.pathLag = random(0, 0.10);
 
-    this.driftX = random(0.006, 0.022);
-    this.driftY = random(0.004, 0.016);
+    this.driftX = random(0.003, 0.010);
+    this.driftY = random(0.003, 0.009);
     this.driftSpeedX = random(0.55, 1.35);
     this.driftSpeedY = random(0.45, 1.15);
     this.driftPhaseX = random(0, Math.PI * 2);
@@ -509,14 +509,32 @@ class Bird {
       this.driftY;
 
     /*
-      実際の移動方向から鳥の向きを算出する。
-      急に向きが切り替わらないよう、角度を滑らかに追従させる。
+      通常飛行中は向きを大きく変えない。
+      旋回開始前は基準方向から±78度以内に固定し、
+      8秒以降の旋回中だけ進行方向へ大きく向きを変える。
     */
-    if (this.hasPreviousPosition) {
+    if (elapsed < 8) {
+      const gentleHeading = clamp(
+        CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
+        this.headingOffset +
+        Math.sin(elapsed * 0.55 + this.tiltPhase) *
+        THREE.MathUtils.degToRad(9),
+        CONFIG.BIRD_IMAGE_FORWARD_ANGLE -
+        CONFIG.NORMAL_HEADING_LIMIT,
+        CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
+        CONFIG.NORMAL_HEADING_LIMIT
+      );
+
+      this.smoothedHeading = lerp(
+        this.smoothedHeading,
+        gentleHeading,
+        0.06
+      );
+    } else if (this.hasPreviousPosition) {
       const dx = x - this.previousPosition.x;
       const dy = y - this.previousPosition.y;
 
-      if (Math.hypot(dx, dy) > 0.00005) {
+      if (Math.hypot(dx, dy) > 0.00015) {
         const movementHeading =
           Math.atan2(dy, dx) +
           CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
@@ -525,21 +543,18 @@ class Bird {
         let angleDifference =
           movementHeading - this.smoothedHeading;
 
-        angleDifference =
-          Math.atan2(
-            Math.sin(angleDifference),
-            Math.cos(angleDifference)
-          );
+        angleDifference = Math.atan2(
+          Math.sin(angleDifference),
+          Math.cos(angleDifference)
+        );
 
         this.smoothedHeading +=
-          angleDifference *
-          this.turnResponse;
+          angleDifference * this.turnResponse;
       }
     } else {
       this.smoothedHeading =
         CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
         this.headingOffset;
-
       this.hasPreviousPosition = true;
     }
 
@@ -562,24 +577,19 @@ class Bird {
       this.baseSize *
       emergeScale;
 
-    if (elapsed >= 8) {
-      const perspectiveMotion =
-        Math.sin(
-          elapsed * 0.85 +
-          this.floatPhase
-        );
-
-      const perspectiveStrength =
-        lerp(
-          0.16,
-          0.07,
-          this.layout.depth
-        );
-
-      size *=
-        1 +
-        perspectiveMotion *
-        perspectiveStrength;
+    /*
+      0〜8秒: 画像の奥から群れになりながら手前へ近づく。
+      8〜12秒: 手前 → 奥 → 手前の順で右回り旋回する。
+    */
+    if (elapsed < 8) {
+      const approachProgress = smoothstep01(elapsed / 8);
+      const approachScale = lerp(0.58, 1.12, approachProgress);
+      size *= approachScale;
+    } else if (elapsed < 12) {
+      const turnProgress = smoothstep01((elapsed - 8) / 4);
+      const frontBackFront = Math.cos(turnProgress * Math.PI * 2);
+      const depthScale = lerp(0.72, 1.18, (frontBackFront + 1) / 2);
+      size *= depthScale;
     }
 
     if (elapsed >= 12) {
@@ -640,53 +650,27 @@ class Bird {
 
   updateWingFrame(elapsed) {
     /*
-      鳥ごとに羽ばたき速度・開始位相・滑空時間を変える。
+      3枚を一定方向に循環させる。
+      UP → MID → DOWN → MID → UP
 
-      羽ばたき中:
-      UP → MID → DOWN → MID
-
-      滑空中:
-      MID または UP を短時間保持
+      羽ばたきを途中で止めず、速度差だけを小さく付けることで、
+      以前より滑らかで自然な群れに見せる。
     */
-
     const flapSequence = [0, 1, 2, 1];
 
-    const cycleDuration =
-      this.flapBurstDuration +
-      this.glideDuration;
+    const frameDuration =
+      this.wingFrameDuration /
+      this.wingSpeedMultiplier;
 
-    const cycleTime =
-      (
-        elapsed +
-        this.wingCycleOffset
-      ) %
-      cycleDuration;
+    const frame = Math.floor(
+      (elapsed + this.wingCycleOffset) /
+      frameDuration
+    ) % flapSequence.length;
 
-    let textureIndex;
+    const textureIndex = flapSequence[frame];
 
-    if (cycleTime < this.flapBurstDuration) {
-      const frame =
-        Math.floor(
-          (
-            cycleTime +
-            this.wingPhaseOffset
-          ) /
-          this.wingFrameDuration
-        ) %
-        flapSequence.length;
-
-      textureIndex = flapSequence[frame];
-    } else {
-      textureIndex = this.glideFrame;
-    }
-
-    if (
-      this.material.map !==
-      birdTextures[textureIndex]
-    ) {
-      this.material.map =
-        birdTextures[textureIndex];
-
+    if (this.material.map !== birdTextures[textureIndex]) {
+      this.material.map = birdTextures[textureIndex];
       this.material.needsUpdate = true;
     }
   }
@@ -744,37 +728,34 @@ function cubicBezier(
 }
 
 function getFlockCenter(elapsed) {
+  /*
+    0〜8秒は画面中央付近で群れを形成しながら接近。
+    8〜12秒は楕円軌道を右回りで1周する。
+    12〜15秒は旋回の流れを保ったまま右外へ退場する。
+  */
   if (elapsed < 8) {
+    const approach = smoothstep01(elapsed / 8);
     return {
-      x: 0,
-      y: 0.02,
+      x: lerp(-screenAspect * 0.08, 0, approach),
+      y: lerp(0.10, 0.01, approach),
     };
   }
 
-  const t =
-    smoothstep01(
-      (elapsed - 8) / 7
-    );
+  if (elapsed < 12) {
+    const t = smoothstep01((elapsed - 8) / 4);
+    const angle = Math.PI - t * Math.PI * 2;
 
-  return cubicBezier(
-    {
-      x: -screenAspect * 0.56,
-      y: -0.05,
-    },
-    {
-      x: -screenAspect * 0.58,
-      y: 0.78,
-    },
-    {
-      x: screenAspect * 0.72,
-      y: 0.72,
-    },
-    {
-      x: screenAspect * 1.65,
-      y: -0.38,
-    },
-    t
-  );
+    return {
+      x: Math.cos(angle) * screenAspect * 0.54,
+      y: 0.04 + Math.sin(angle) * 0.42,
+    };
+  }
+
+  const exit = smoothstep01((elapsed - 12) / 3);
+  return {
+    x: lerp(-screenAspect * 0.54, screenAspect * 1.65, exit),
+    y: lerp(0.04, -0.28, exit),
+  };
 }
 
 const birds = [];
