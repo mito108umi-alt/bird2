@@ -6,7 +6,7 @@ import { MindARThree } from "mindar-image-three";
    ---------------------------------------------------------
    0〜1秒   : 最初の1羽
    1〜3秒   : 複数地点から順次出現
-   3〜5秒   : 約125羽まで増加
+   3〜5秒   : 約200羽まで増加
    5〜8秒   : 画面全体へ群れが広がる
    8〜12秒  : 広がったまま右回り大旋回
    12〜15秒 : 旋回しながら画面外へ退場
@@ -14,7 +14,7 @@ import { MindARThree } from "mindar-image-three";
 ========================================================= */
 
 const CONFIG = {
-  TARGET_FILE: "./assets/targets.mind",
+  TARGET_FILE: "./assets/targets_rise.mind",
 
   BIRD_TEXTURES: [
     "./assets/bird_up.png",
@@ -22,7 +22,7 @@ const CONFIG = {
     "./assets/bird_down.png",
   ],
 
-  BIRD_COUNT: 125,
+  BIRD_COUNT: 200,
 
   FIRST_BIRD_END: 1.0,
   MULTI_SPAWN_END: 3.0,
@@ -511,8 +511,8 @@ class Bird {
 
       worldZ =
         lerp(
-          3.4,
-          1.0,
+          4.4,
+          0.72,
           approach
         );
     } else if (elapsed < 12) {
@@ -546,7 +546,7 @@ class Bird {
         this.turnRadiusScale;
 
       const radiusZ =
-        1.45 *
+        2.15 *
         this.turnRadiusScale;
 
       worldX =
@@ -554,7 +554,7 @@ class Bird {
         radiusX;
 
       worldZ =
-        2.15 -
+        2.55 -
         Math.sin(angle) *
         radiusZ;
 
@@ -597,7 +597,7 @@ class Bird {
     */
     const birdZ =
       Math.max(
-        0.42,
+        0.34,
         worldZ +
         this.depthOffset +
         this.layout.depth * 0.58
@@ -607,11 +607,15 @@ class Bird {
       簡易透視投影。
       奥ほど中心へ寄り、小さくなる。
     */
+    /*
+      遠近差を大きくする。
+      奥では従来より小さく、最前面では現在の3倍以上まで拡大する。
+    */
     const perspective =
       clamp(
-        1.36 / birdZ,
-        0.28,
-        2.15
+        2.45 / birdZ,
+        0.16,
+        7.2
       );
 
     const formationX =
@@ -684,7 +688,19 @@ class Bird {
           CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
           this.headingOffset;
 
-        if (!(elapsed >= 8 && elapsed < 12)) {
+        if (elapsed < CONFIG.FORMATION_END) {
+          /*
+            出現から群れ形成完了までは、
+            基準方向から±15度以内に制限する。
+          */
+          movementHeading = clamp(
+            movementHeading,
+            CONFIG.BIRD_IMAGE_FORWARD_ANGLE -
+              THREE.MathUtils.degToRad(15),
+            CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
+              THREE.MathUtils.degToRad(15)
+          );
+        } else if (!(elapsed >= 8 && elapsed < 12)) {
           movementHeading = clamp(
             movementHeading,
             CONFIG.BIRD_IMAGE_FORWARD_ANGLE -
