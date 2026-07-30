@@ -5,9 +5,9 @@ import { MindARThree } from "mindar-image-three";
    白い鳥 WebAR
    ---------------------------------------------------------
    0〜1秒   : 最初の1羽
-   1〜3秒   : 複数地点から順次出現
+   1〜3秒   : 約45羽まで順次出現
    3〜5秒   : 約200羽まで増加
-   5〜8秒   : 画面全体へ群れが広がる
+   5〜8秒   : 個体ごとにX-Z方向へ旋回しながら接近
    8〜12秒  : 広がったまま右回り大旋回
    12〜15秒 : 旋回しながら画面外へ退場
    15秒〜   : 羽＋キラキラが継続
@@ -31,8 +31,8 @@ const CONFIG = {
   CIRCLE_END: 12.0,
   EXIT_END: 15.0,
 
-  WING_FRAME_MIN: 0.075,
-  WING_FRAME_MAX: 0.15,
+  WING_FRAME_MIN: 0.09,
+  WING_FRAME_MAX: 0.18,
 
   /*
     bird PNGが右向きなら0。
@@ -406,6 +406,16 @@ class Bird {
     this.turnPhaseOffset = random(-0.16, 0.16);
     this.depthWavePhase = random(0, Math.PI * 2);
     this.depthWaveAmount = random(0.04, 0.14);
+
+    /*
+      5〜8秒の接近中に使う個体別X-Z旋回。
+      全羽が同じ軌道にならないよう、半径・速度・位相を変える。
+    */
+    this.approachOrbitRadiusX = random(0.10, 0.42);
+    this.approachOrbitRadiusZ = random(0.16, 0.58);
+    this.approachOrbitSpeed = random(0.72, 1.42);
+    this.approachOrbitPhase = random(0, Math.PI * 2);
+    this.approachOrbitDirection = Math.random() < 0.5 ? -1 : 1;
   }
 
   reset(spawnPositions) {
@@ -476,11 +486,11 @@ class Bird {
         smoothstep01((elapsed - 3) / 2)
       );
     } else if (elapsed < 8) {
-      spread = lerp(
-        CONFIG.MID_SPREAD,
-        CONFIG.FULL_SPREAD,
-        smoothstep01((elapsed - 5) / 3)
-      );
+      /*
+        5〜8秒は群れ全体を単純に広げない。
+        中程度のまとまりを維持し、個体のX-Z旋回で立体感を出す。
+      */
+      spread = CONFIG.MID_SPREAD;
     } else {
       spread = CONFIG.FULL_SPREAD;
     }
@@ -495,26 +505,65 @@ class Bird {
     let worldZ = 2.4;
     let turnProgress = 0;
 
-    if (elapsed < 8) {
+    if (elapsed < 5) {
       /*
-        奥から現れ、群れになりながら手前へ近づく。
+        0〜5秒:
+        バラバラな出現地点から群れを形成する。
+        向きは既存設定どおり±15度以内。
       */
-      const approach =
-        smoothstep01(elapsed / 8);
+      const formationApproach =
+        smoothstep01(elapsed / 5);
 
       worldX =
         lerp(
           -screenAspect * 0.12,
-          0,
-          approach
+          -screenAspect * 0.04,
+          formationApproach
         );
 
       worldZ =
         lerp(
           4.4,
+          3.25,
+          formationApproach
+        );
+    } else if (elapsed < 8) {
+      /*
+        5〜8秒:
+        各個体がX-Z方向に別々の小さな旋回を行いながら、
+        群れ全体として奥から手前へ近づく。
+      */
+      const approach =
+        smoothstep01((elapsed - 5) / 3);
+
+      const orbitTime =
+        (elapsed - 5) *
+        this.approachOrbitSpeed *
+        this.approachOrbitDirection +
+        this.approachOrbitPhase;
+
+      const orbitFade =
+        Math.sin(approach * Math.PI);
+
+      worldX =
+        lerp(
+          -screenAspect * 0.04,
+          0,
+          approach
+        ) +
+        Math.cos(orbitTime) *
+        this.approachOrbitRadiusX *
+        orbitFade;
+
+      worldZ =
+        lerp(
+          3.25,
           0.72,
           approach
-        );
+        ) +
+        Math.sin(orbitTime) *
+        this.approachOrbitRadiusZ *
+        orbitFade;
     } else if (elapsed < 12) {
       /*
         X-Z平面上で右回りに大きく旋回。
@@ -871,22 +920,29 @@ function calculateSpawnTime(index) {
     return 0;
   }
 
-  if (index < 15) {
+  /*
+    1〜3秒で45羽まで増加。
+    index 0を含めて、3秒時点で約45羽。
+  */
+  if (index < 45) {
     return lerp(
       1.05,
       2.95,
-      (index - 1) / 13
+      (index - 1) / 43
     ) +
-    random(-0.08, 0.08);
+    random(-0.06, 0.06);
   }
 
+  /*
+    残りの155羽は3〜5秒で順次出現。
+  */
   return lerp(
     3.0,
     4.85,
-    (index - 15) /
-    (CONFIG.BIRD_COUNT - 15)
+    (index - 45) /
+    (CONFIG.BIRD_COUNT - 45)
   ) +
-  random(-0.07, 0.07);
+  random(-0.05, 0.05);
 }
 
 function cubicBezier(
@@ -1195,7 +1251,7 @@ class Feather {
       random(0, Math.PI * 2);
 
     this.size =
-      random(0.035, 0.075);
+      random(0.070, 0.150);
 
     this.sprite.scale.set(
       this.size * 0.52,
