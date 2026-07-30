@@ -31,8 +31,21 @@ const CONFIG = {
   CIRCLE_END: 12.0,
   EXIT_END: 15.0,
 
-  WING_FRAME_MIN: 0.09,
-  WING_FRAME_MAX: 0.13,
+  WING_FRAME_MIN: 0.075,
+  WING_FRAME_MAX: 0.15,
+
+  /*
+    bird PNGが右向きなら0。
+    上向きの画像なら Math.PI / 2 に変更する。
+  */
+  BIRD_IMAGE_FORWARD_ANGLE: 0,
+
+  /*
+    群れ全体の進行方向から、
+    各個体が自然にずれる角度。
+  */
+  HEADING_OFFSET_MIN: THREE.MathUtils.degToRad(-10),
+  HEADING_OFFSET_MAX: THREE.MathUtils.degToRad(10),
 
   FLOAT_AMPLITUDE_MIN: 0.006,
   FLOAT_AMPLITUDE_MAX: 0.018,
@@ -325,6 +338,15 @@ class Bird {
 
     this.wingPhaseOffset = random(0, 0.45);
 
+    /*
+      個体ごとに「連続して羽ばたく時間」と
+      「短く滑空する時間」を変える。
+    */
+    this.flapBurstDuration = random(0.7, 1.8);
+    this.glideDuration = random(0.12, 0.55);
+    this.glideFrame = Math.random() < 0.65 ? 1 : 0;
+    this.wingCycleOffset = random(0, 2.0);
+
     this.floatAmplitude = random(
       CONFIG.FLOAT_AMPLITUDE_MIN,
       CONFIG.FLOAT_AMPLITUDE_MAX
@@ -348,7 +370,28 @@ class Bird {
     this.spawnTime = calculateSpawnTime(index);
     this.spawnPosition = new THREE.Vector2();
 
-    this.flip = Math.random() < 0.12 ? -1 : 1;
+    /*
+      群れの大きな流れは揃えつつ、
+      個体ごとに進行方向・追従速度・揺れを少し変える。
+    */
+    this.headingOffset = random(
+      CONFIG.HEADING_OFFSET_MIN,
+      CONFIG.HEADING_OFFSET_MAX
+    );
+
+    this.turnResponse = random(0.08, 0.18);
+    this.pathLag = random(0, 0.32);
+
+    this.driftX = random(0.006, 0.022);
+    this.driftY = random(0.004, 0.016);
+    this.driftSpeedX = random(0.55, 1.35);
+    this.driftSpeedY = random(0.45, 1.15);
+    this.driftPhaseX = random(0, Math.PI * 2);
+    this.driftPhaseY = random(0, Math.PI * 2);
+
+    this.smoothedHeading = CONFIG.BIRD_IMAGE_FORWARD_ANGLE;
+    this.previousPosition = new THREE.Vector2();
+    this.hasPreviousPosition = false;
   }
 
   reset(spawnPositions) {
@@ -365,6 +408,10 @@ class Bird {
 
     this.material.map = birdTextures[0];
     this.material.needsUpdate = true;
+
+    this.previousPosition.copy(this.spawnPosition);
+    this.hasPreviousPosition = false;
+    this.smoothedHeading = CONFIG.BIRD_IMAGE_FORWARD_ANGLE;
   }
 
   update(elapsed) {
@@ -403,7 +450,13 @@ class Bird {
       spread = CONFIG.FULL_SPREAD;
     }
 
-    const center = getFlockCenter(elapsed);
+    /*
+      群れの進行方向は共通だが、
+      個体ごとにわずかな時間差を持たせる。
+    */
+    const center = getFlockCenter(
+      Math.max(0, elapsed - this.pathLag)
+    );
 
     const destinationX =
       center.x +
@@ -437,13 +490,60 @@ class Bird {
       ) *
       this.floatAmplitude;
 
+    /*
+      同じ群れの中で、各鳥が完全に同じ軌道を通らないようにする。
+      大きくばらけさせず、群れとしての一体感は維持する。
+    */
     x +=
       Math.sin(
-        elapsed * 1.25 +
-        this.floatPhase
+        elapsed * this.driftSpeedX +
+        this.driftPhaseX
       ) *
-      0.008;
+      this.driftX;
 
+    y +=
+      Math.sin(
+        elapsed * this.driftSpeedY +
+        this.driftPhaseY
+      ) *
+      this.driftY;
+
+    /*
+      実際の移動方向から鳥の向きを算出する。
+      急に向きが切り替わらないよう、角度を滑らかに追従させる。
+    */
+    if (this.hasPreviousPosition) {
+      const dx = x - this.previousPosition.x;
+      const dy = y - this.previousPosition.y;
+
+      if (Math.hypot(dx, dy) > 0.00005) {
+        const movementHeading =
+          Math.atan2(dy, dx) +
+          CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
+          this.headingOffset;
+
+        let angleDifference =
+          movementHeading - this.smoothedHeading;
+
+        angleDifference =
+          Math.atan2(
+            Math.sin(angleDifference),
+            Math.cos(angleDifference)
+          );
+
+        this.smoothedHeading +=
+          angleDifference *
+          this.turnResponse;
+      }
+    } else {
+      this.smoothedHeading =
+        CONFIG.BIRD_IMAGE_FORWARD_ANGLE +
+        this.headingOffset;
+
+      this.hasPreviousPosition = true;
+    }
+
+    this.previousPosition.set(x, y);
     this.sprite.position.set(x, y, 0);
 
     /*
@@ -515,46 +615,77 @@ class Bird {
     const width = size * 1.72;
 
     this.sprite.scale.set(
-      width * this.flip,
+      width,
       size,
       1
     );
 
     this.updateWingFrame(elapsed);
 
-    this.material.rotation =
+    /*
+      進行方向に合わせた向き
+      ＋個体ごとの小さなバンク角。
+    */
+    const bank =
       Math.sin(
         elapsed * 1.6 +
         this.tiltPhase
       ) *
       this.tiltAmplitude;
+
+    this.material.rotation =
+      this.smoothedHeading +
+      bank;
   }
 
   updateWingFrame(elapsed) {
-    const sequence = [0, 1, 2, 1];
+    /*
+      鳥ごとに羽ばたき速度・開始位相・滑空時間を変える。
 
-    const adjusted =
-      elapsed +
-      this.wingPhaseOffset;
+      羽ばたき中:
+      UP → MID → DOWN → MID
 
-    const frame =
-      Math.floor(
-        adjusted /
-        this.wingFrameDuration
+      滑空中:
+      MID または UP を短時間保持
+    */
+
+    const flapSequence = [0, 1, 2, 1];
+
+    const cycleDuration =
+      this.flapBurstDuration +
+      this.glideDuration;
+
+    const cycleTime =
+      (
+        elapsed +
+        this.wingCycleOffset
       ) %
-      sequence.length;
+      cycleDuration;
 
-    const textureIndex =
-      sequence[frame];
+    let textureIndex;
+
+    if (cycleTime < this.flapBurstDuration) {
+      const frame =
+        Math.floor(
+          (
+            cycleTime +
+            this.wingPhaseOffset
+          ) /
+          this.wingFrameDuration
+        ) %
+        flapSequence.length;
+
+      textureIndex = flapSequence[frame];
+    } else {
+      textureIndex = this.glideFrame;
+    }
 
     if (
       this.material.map !==
       birdTextures[textureIndex]
     ) {
       this.material.map =
-        birdTextures[
-          textureIndex
-        ];
+        birdTextures[textureIndex];
 
       this.material.needsUpdate = true;
     }
