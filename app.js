@@ -4,13 +4,13 @@ import { MindARThree } from "mindar-image-three";
 /* =========================================================
    白い鳥 WebAR・350羽版
    ---------------------------------------------------------
-   0〜1秒   : 最初の1羽
+   0〜1秒   : 最初の1羽が少し手前寄りから開始
    1〜3秒   : 50か所から150羽まで出現
    3〜5秒   : 合計350羽まで増加。個体別X/Y/Z移動、回転なし
-   5〜8秒   : 正面・斜め正面画像でZ方向の手前へ大接近
-   8〜12秒  : X-Z空間で右回り大旋回
-   12〜15秒 : 止まらず右方向へ退場
-   15秒〜   : 水色・薄ピンクの羽とキラキラ
+   5〜8秒   : 全羽が個別の曲線軌道を描きつつ手前へ大接近
+   8〜12秒  : 群として右回り旋回しつつ、各鳥も曲線軌道で移動
+   12〜15秒 : 止まらず右・上・下へ分岐退場
+   15秒〜   : 添付の羽20枚＋キラキラがふわふわ舞い落ちる
 ========================================================= */
 
 const CONFIG = {
@@ -27,7 +27,16 @@ const CONFIG = {
     "./assets/bird_for_mid.png",
   ],
 
+  FRONT_STRAIGHT_TEXTURE:
+    "./assets/bird_front_straight.png",
+
   HIGH_TEXTURE: "./assets/bird_high.png",
+
+  FEATHER_TEXTURES: [
+    "./assets/feather_a.png",
+    "./assets/feather_b.png",
+    "./assets/feather_c.png",
+  ],
 
   BIRD_COUNT: 350,
   SPAWN_POINT_COUNT: 50,
@@ -57,7 +66,7 @@ const CONFIG = {
   MID_SPREAD: 0.54,
   FULL_SPREAD: 0.92,
 
-  FEATHER_COUNT: 40,
+  FEATHER_COUNT: 20,
   SPARKLE_COUNT: 70,
 
   MIN_TRIGGER_INTERVAL: 1500,
@@ -192,7 +201,9 @@ function loadTexture(path) {
 
 let birdTextures = [];
 let frontTextures = [];
+let frontStraightTexture = null;
 let highTexture = null;
+let featherTextures = [];
 
 function generateFlockLayout() {
   const layout = [];
@@ -283,13 +294,12 @@ class Bird {
     this.approachRadius = random(0.06, 0.30);
     this.approachSpeed = random(0.75, 1.35);
 
-    this.hasComplexApproach = Math.random() < 0.70;
-    this.approachOrbitRadiusX = random(0.08, 0.52);
-    this.approachOrbitRadiusY = random(0.06, 0.38);
-    this.approachOrbitRadiusZ = random(0.10, 0.62);
-    this.approachOrbitSpeedX = random(0.70, 1.65);
-    this.approachOrbitSpeedY = random(0.62, 1.48);
-    this.approachOrbitSpeedZ = random(0.58, 1.42);
+    this.approachOrbitRadiusX = random(0.12, 0.62);
+    this.approachOrbitRadiusY = random(0.10, 0.46);
+    this.approachOrbitRadiusZ = random(0.12, 0.74);
+    this.approachOrbitSpeedX = random(0.70, 1.75);
+    this.approachOrbitSpeedY = random(0.62, 1.58);
+    this.approachOrbitSpeedZ = random(0.58, 1.52);
     this.approachOrbitDirectionX = Math.random() < 0.5 ? -1 : 1;
     this.approachOrbitDirectionY = Math.random() < 0.5 ? -1 : 1;
     this.approachOrbitDirectionZ = Math.random() < 0.5 ? -1 : 1;
@@ -320,6 +330,14 @@ class Bird {
     this.turnPhaseOffset = random(-0.18, 0.18);
     this.turnVerticalOffset = random(-0.24, 0.24);
     this.turnDepthOffset = random(-0.34, 0.34);
+    this.turnCurveRadiusX = random(0.08, 0.34);
+    this.turnCurveRadiusY = random(0.05, 0.22);
+    this.turnCurveRadiusZ = random(0.10, 0.36);
+    this.turnCurveSpeedX = random(0.90, 1.95);
+    this.turnCurveSpeedY = random(0.80, 1.70);
+    this.turnCurveSpeedZ = random(0.70, 1.55);
+    this.turnCurvePhase = random(0, Math.PI * 2);
+    this.turnCurveDirection = Math.random() < 0.5 ? -1 : 1;
 
     this.previousPosition = new THREE.Vector2();
     this.smoothedHeading = 0;
@@ -419,12 +437,20 @@ class Bird {
         (0.35 + p * 0.65);
 
       worldZ =
-        lerp(5.2, 3.35, p) +
+        lerp(4.25, 3.25, p) +
         Math.sin(orbit * 0.83) *
         this.preOrbitRadiusZ;
 
-      perspective = clamp(1.65 / worldZ, 0.22, 0.62);
-      this.setTexture(frontTextures[this.frontTextureIndex], false);
+      perspective = clamp(1.95 / worldZ, 0.26, 0.90);
+
+      if (this.approachStyle === 0) {
+        this.setTexture(frontStraightTexture, false);
+      } else if (this.approachStyle === 1) {
+        this.setTexture(highTexture, false);
+      } else {
+        this.setTexture(highTexture, true);
+      }
+
       this.material.rotation = 0;
     }
 
@@ -435,130 +461,118 @@ class Bird {
     */
     else if (elapsed < 8) {
       const p = smoothstep01((elapsed - 5) / 3);
-      const orbit =
+      const orbitTime =
         (elapsed - 5) *
         this.approachSpeed +
         this.approachPhase;
 
       worldZ =
-        lerp(3.35, 0.26, p) +
-        Math.sin(orbit) *
+        lerp(3.25, 0.22, p) +
+        Math.sin(orbitTime) *
         this.approachRadius *
-        (1 - p);
+        (1 - p * 0.35);
 
-      perspective = clamp(
-        2.65 / Math.max(worldZ, 0.22),
-        0.42,
-        10.8
-      );
-
-      const spreadScale = lerp(0.52, 1.18, p);
+      const spreadScale = lerp(0.52, 1.24, p);
 
       if (this.approachStyle === 0) {
         screenX =
           this.layout.x *
           screenAspect *
-          spreadScale *
-          perspective;
+          spreadScale;
 
         screenY =
           this.layout.y *
-          spreadScale *
-          perspective;
+          spreadScale;
       } else if (this.approachStyle === 1) {
         screenX =
           lerp(
-            screenAspect * 0.82,
-            -screenAspect * 0.68,
+            screenAspect * 0.84,
+            -screenAspect * 0.72,
             p
           ) +
-          this.layout.x *
-          0.30 *
-          perspective;
+          this.layout.x * 0.34;
 
         screenY =
           lerp(
-            0.70,
-            -0.56,
+            0.72,
+            -0.58,
             p
           ) +
-          this.layout.y *
-          0.22 *
-          perspective;
+          this.layout.y * 0.24;
       } else {
         screenX =
           lerp(
-            -screenAspect * 0.82,
-            screenAspect * 0.68,
+            -screenAspect * 0.84,
+            screenAspect * 0.72,
             p
           ) +
-          this.layout.x *
-          0.30 *
-          perspective;
+          this.layout.x * 0.34;
 
         screenY =
           lerp(
-            0.70,
-            -0.56,
+            0.72,
+            -0.58,
             p
           ) +
-          this.layout.y *
-          0.22 *
-          perspective;
+          this.layout.y * 0.24;
       }
 
-      if (this.hasComplexApproach) {
-        const t = elapsed - 5;
-        const envelope = Math.sin(p * Math.PI);
+      /*
+        全羽が個別の曲線軌道で移動する。
+        X/Y/Zの軌道差を重ねながら、全体は手前へ移動。
+      */
+      const t = elapsed - 5;
+      const envelope = 0.45 + Math.sin(p * Math.PI) * 0.95;
 
-        const orbitX =
-          t *
-          this.approachOrbitSpeedX *
-          this.approachOrbitDirectionX +
-          this.approachPhase;
+      const orbitX =
+        t *
+        this.approachOrbitSpeedX *
+        this.approachOrbitDirectionX +
+        this.approachPhase;
 
-        const orbitY =
-          t *
-          this.approachOrbitSpeedY *
-          this.approachOrbitDirectionY +
-          this.approachPhase * 1.37;
+      const orbitY =
+        t *
+        this.approachOrbitSpeedY *
+        this.approachOrbitDirectionY +
+        this.approachPhase * 1.37;
 
-        const orbitZ =
-          t *
-          this.approachOrbitSpeedZ *
-          this.approachOrbitDirectionZ +
-          this.approachPhase * 0.73;
+      const orbitZ =
+        t *
+        this.approachOrbitSpeedZ *
+        this.approachOrbitDirectionZ +
+        this.approachPhase * 0.73;
 
-        screenX +=
-          Math.cos(orbitX) *
-          this.approachOrbitRadiusX *
-          envelope *
-          perspective;
+      screenX +=
+        Math.cos(orbitX) *
+        this.approachOrbitRadiusX *
+        envelope;
 
-        screenY +=
-          Math.sin(orbitY) *
-          this.approachOrbitRadiusY *
-          envelope *
-          perspective;
+      screenY +=
+        Math.sin(orbitY) *
+        this.approachOrbitRadiusY *
+        envelope;
 
-        worldZ +=
-          Math.sin(orbitZ) *
-          this.approachOrbitRadiusZ *
-          envelope;
+      worldZ +=
+        Math.sin(orbitZ) *
+        this.approachOrbitRadiusZ *
+        envelope;
 
-        perspective = clamp(
-          2.65 / Math.max(worldZ, 0.22),
-          0.42,
-          10.8
-        );
-      }
+      perspective = clamp(
+        2.95 / Math.max(worldZ, 0.18),
+        0.50,
+        12.4
+      );
 
+      screenX *= perspective;
+      screenY *= perspective;
+
+      /*
+        手前へ十分近づくまで、正面・斜め正面画像を維持。
+        閾値を超えた個体だけ bird_mid / bird_down に切替。
+      */
       if (p < this.nearTextureSwitchProgress) {
         if (this.approachStyle === 0) {
-          this.setTexture(
-            frontTextures[this.frontTextureIndex],
-            false
-          );
+          this.setTexture(frontStraightTexture, false);
         } else if (this.approachStyle === 1) {
           this.setTexture(highTexture, false);
         } else {
@@ -610,21 +624,48 @@ class Bird {
         this.layout.y * 0.62 +
         this.turnVerticalOffset;
 
+      /*
+        群としては右回り旋回しつつ、
+        各鳥は個別の曲線軌道も重ねる。
+      */
+      const turnTime =
+        (elapsed - 8) *
+        this.turnCurveDirection +
+        this.turnCurvePhase;
+
+      worldX +=
+        Math.cos(turnTime * this.turnCurveSpeedX) *
+        this.turnCurveRadiusX;
+
+      worldY +=
+        Math.sin(turnTime * this.turnCurveSpeedY) *
+        this.turnCurveRadiusY;
+
+      worldZ +=
+        Math.sin(turnTime * this.turnCurveSpeedZ) *
+        this.turnCurveRadiusZ;
+
       perspective = clamp(
-        2.35 / Math.max(worldZ, 0.28),
-        0.22,
-        8.4
+        2.45 / Math.max(worldZ, 0.24),
+        0.24,
+        8.8
       );
 
       screenX =
-        worldX * perspective +
-        this.layout.x *
-        screenAspect *
-        0.42 *
+        (
+          worldX +
+          this.layout.x *
+          screenAspect *
+          0.42
+        ) *
         perspective;
 
       screenY =
-        worldY * perspective;
+        (
+          worldY +
+          this.layout.y * 0.12
+        ) *
+        perspective;
 
       this.updateWingFrame(elapsed);
     }
@@ -1111,7 +1152,12 @@ class Feather {
   constructor() {
     this.material =
       new THREE.SpriteMaterial({
-        map: featherTexture,
+        map: featherTextures[
+          randomInt(
+            0,
+            Math.max(featherTextures.length - 1, 0)
+          )
+        ] || featherTexture,
         transparent: true,
         depthTest: false,
         depthWrite: false,
@@ -1144,28 +1190,47 @@ class Feather {
       : random(1.02, 1.35);
 
     this.speed =
-      random(0.045, 0.11);
+      random(0.020, 0.060);
 
     this.sway =
-      random(0.05, 0.16);
+      random(0.09, 0.26);
 
     this.swaySpeed =
-      random(0.6, 1.4);
+      random(0.45, 1.15);
 
     this.phase =
       random(0, Math.PI * 2);
 
     this.rotationSpeed =
-      random(-0.45, 0.45);
+      random(-0.30, 0.30);
 
     this.rotation =
       random(0, Math.PI * 2);
 
+    this.driftX =
+      random(0.06, 0.22);
+
+    this.flutterY =
+      random(0.015, 0.050);
+
+    this.depthPhase =
+      random(0, Math.PI * 2);
+
     this.size =
-      random(0.070, 0.150);
+      random(0.140, 0.300);
+
+    const textureScale =
+      this.material.map &&
+      this.material.map.image
+        ? this.material.map.image.width /
+          Math.max(
+            this.material.map.image.height,
+            1
+          )
+        : 0.70;
 
     this.sprite.scale.set(
-      this.size * 0.52,
+      this.size * textureScale,
       this.size,
       1
     );
@@ -1175,39 +1240,50 @@ class Feather {
     this.y -=
       this.speed * dt;
 
-    const offset =
+    const waveX =
       Math.sin(
-        time *
-        this.swaySpeed +
+        time * this.swaySpeed +
         this.phase
-      ) *
-      this.sway;
+      ) * this.sway;
+
+    const curlX =
+      Math.cos(
+        time * (this.swaySpeed * 0.72) +
+        this.phase * 1.3
+      ) * this.driftX;
+
+    const floatY =
+      Math.sin(
+        time * 0.95 +
+        this.phase * 0.8
+      ) * this.flutterY;
 
     this.rotation +=
       this.rotationSpeed *
       dt;
 
     this.sprite.position.set(
-      this.x + offset,
-      this.y,
-      0.3
+      this.x + waveX + curlX,
+      this.y + floatY,
+      0.3 + Math.sin(time + this.depthPhase) * 0.01
     );
 
     this.material.rotation =
-      this.rotation;
+      this.rotation +
+      Math.sin(time * 0.55 + this.phase) * 0.12;
 
     if (
       Math.sin(
-        time * 0.55 +
+        time * 0.45 +
         this.phase
       ) >
-      0.88
+      0.84
     ) {
       this.y +=
-        dt * 0.035;
+        dt * 0.022;
     }
 
-    if (this.y < -1.25) {
+    if (this.y < -1.28) {
       this.reset(false);
     }
   }
@@ -1574,9 +1650,19 @@ async function startAR() {
         CONFIG.FRONT_TEXTURES.map(loadTexture)
       );
 
+    frontStraightTexture =
+      await loadTexture(
+        CONFIG.FRONT_STRAIGHT_TEXTURE
+      );
+
     highTexture =
       await loadTexture(
         CONFIG.HIGH_TEXTURE
+      );
+
+    featherTextures =
+      await Promise.all(
+        CONFIG.FEATHER_TEXTURES.map(loadTexture)
       );
 
     for (
